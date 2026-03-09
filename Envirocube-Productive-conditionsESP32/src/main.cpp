@@ -1,25 +1,37 @@
+#include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
 
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 128 // OLED display height, in pixels
+#define OLED_RESET -1     // can set an oled reset pin if desired
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET, 1000000, 100000);
 
 
 void setup() {
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  Serial.begin(9600);
+
+  delay(250); // wait for the OLED to power up
+
+  // Show image buffer on the display hardware.
+  // Since the buffer is intialized with an Adafruit splashscreen
+  // internally, this will display the splashscreen.
+
+  display.begin(0x3D, true); // Address 0x3D default
+ //display.setContrast (0); // dim display
+
   display.clearDisplay(); 
   display.setTextSize(2);
-  display.setTextColor(WHITE);
+  display.setTextColor(SH110X_WHITE);
   display.setCursor(10, 10);
   display.println("Hello, World!");
   display.display();
 }
 
 void loop() {
-  display.startscrollright(0, 7);
+  
 }
 
 
