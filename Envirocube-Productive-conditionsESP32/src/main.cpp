@@ -1,38 +1,45 @@
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH110X.h>
 
-TFT_eSPI tft = TFT_eSPI();
+// Standard S3 I2C Pins
+#define i2c_Address 0x3c 
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1   // Reset pin # (or -1 if sharing Arduino reset pin)
+
+Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
 void setup() {
-    Serial.begin(115200);
-    
-    // FORCE BACKLIGHT ON
-    pinMode(45, OUTPUT); 
-    digitalWrite(45, HIGH); 
+  Serial.begin(115200);
+  delay(1000);
 
-    tft.init();
-    tft.setRotation(1);
-    tft.fillScreen(TFT_BLUE); 
+  // Initialize I2C with your specific S3 pins
+  // (SDA is GPIO 35, SCL is GPIO 36 based on your previous config)
+  Wire.begin(35, 36);
 
-    tft.fillScreen(TFT_BLUE); 
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(3);
-    tft.setCursor(10, 10);
-    tft.println("GT TEST"); 
+  if(!display.begin(i2c_Address, true)) {
+    Serial.println("SH110X allocation failed");
+    for(;;);
+  }
+
+  display.clearDisplay();
+  display.display();
+  Serial.println(">>> Envirocube OLED: Let it snow!");
 }
+
 void loop() {
-    // Generate random coordinates
-    int x = random(0, 240);
-    int y = random(0, 135);
-    int size = random(1, 4);
+  int x = random(0, display.width());
+  int y = random(0, display.height());
+  
+  // Draw a snowflake (a single pixel or small circle)
+  display.drawPixel(x, y, SH110X_WHITE);
+  display.display();
+  
+  delay(50);
 
-    // Draw the snowflake
-    tft.fillCircle(x, y, size, TFT_WHITE);
-    
-    // Slight delay so it looks like falling snow
-    delay(50);
-
-    // Reset screen occasionally so it doesn't turn solid white
-    if (millis() % 10000 < 50) {
-        tft.fillScreen(TFT_BLUE);
-    }
+  // Clear every 10 seconds
+  if (millis() % 10000 < 50) {
+    display.clearDisplay();
+  }
 }
