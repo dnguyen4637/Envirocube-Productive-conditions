@@ -20,10 +20,19 @@ void setup() {
     tft.println("GT TEST"); 
 }
 void loop() {
-    // Dynamic placeholder data
-    tft.setCursor(20, 140);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.printf("Temp: %d C  ", 24 + random(-1, 2));
-    delay(1000);
+    // Generate random coordinates
+    int x = random(0, 240);
+    int y = random(0, 135);
+    int size = random(1, 4);
+
+    // Draw the snowflake
+    tft.fillCircle(x, y, size, TFT_WHITE);
+    
+    // Slight delay so it looks like falling snow
+    delay(50);
+
+    // Reset screen occasionally so it doesn't turn solid white
+    if (millis() % 10000 < 50) {
+        tft.fillScreen(TFT_BLUE);
+    }
 }
