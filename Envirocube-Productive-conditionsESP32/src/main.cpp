@@ -27,30 +27,100 @@ Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, MOSI_PIN,
 
 
 
+
+
+void drawGraphFrames() {
+  // Screen is 128x128. Let's make 4 boxes of 60x60
+  
+  // 1. Top Left: Sound
+  display.drawRect(0, 10, 60, 50, SH110X_WHITE);
+  display.setCursor(2, 0);
+  display.print("Snd");
+  
+  // 2. Top Right: Temp
+  display.drawRect(68, 10, 60, 50, SH110X_WHITE);
+  display.setCursor(70, 0);
+  display.print("Tmp");
+
+  // 3. Bottom Left: CO2
+  display.drawRect(0, 75, 60, 50, SH110X_WHITE);
+  display.setCursor(2, 65);
+  display.print("CO2");
+
+  // 4. Bottom Right: AQI
+  display.drawRect(68, 75, 60, 50, SH110X_WHITE);
+  display.setCursor(70, 65);
+  display.print("AQI");
+}
+
+
+
+
 void setup() {
-  Serial.begin(9600);
+ Serial.begin(9600);
+  delay(250); 
 
-  delay(250); // wait for the OLED to power up
+  if(!display.begin(0x3D, true)) {
+    for(;;); 
+  }
 
-  // Show image buffer on the display hardware.
-  // Since the buffer is intialized with an Adafruit splashscreen
-  // internally, this will display the splashscreen.
-
-  display.begin(0x3D, true); // Address 0x3D default
- //display.setContrast (0); // dim display
-
-  display.clearDisplay(); 
-  display.setTextSize(2);
+  display.clearDisplay();
+  
+  // Draw the UI Layout
+  drawGraphFrames();
+  
+  // Example: Printing a warning if sound is high
+  // In a real loop, you'd check: if (sound_db > 70)
+  display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
-  display.setCursor(10, 10);
-  display.println("ALERT: It is Loud ");
+  display.setCursor(0, 0); 
+  display.println("ALERT: TOO LOUD!");
+
   display.display();
 }
 
+
+
+
+// --- ADD THIS ABOVE SETUP ---
+int soundHistory[60]; // Array to store sound bars
+int tempHistory[60];  // Array to store temp line points
+int writeIndex = 0;   // Where we are in the graph
+
 void loop() {
-  
+  // 1. Read Sensors
+  int rawSound = analogRead(A3_PIN);
+  int rawTemp  = analogRead(A4_PIN);
+
+  // 2. Map values to fit inside our 50-pixel high boxes
+  // ESP32 analog is 0-4095. We want 0-45 pixels height
+  int soundBarHeight = map(rawSound, 0, 4095, 0, 45);
+  int tempPixelY = map(rawTemp, 0, 4095, 55, 15); // Inverted: 55 is bottom, 15 is top
+
+  // 3. Store in history (Shift values to the left to "scroll")
+  for (int i = 0; i < 59; i++) {
+    soundHistory[i] = soundHistory[i+1];
+    tempHistory[i] = tempHistory[i+1];
+  }
+  soundHistory[59] = soundBarHeight;
+  tempHistory[59] = tempPixelY;
+
+  // 4. Redraw Screen
+  display.clearDisplay();
+  drawGraphFrames();
+
+  // DRAW SOUND BARS (Top Left)
+  for (int i = 0; i < 60; i++) {
+    // drawFastVLine(x, y, height, color)
+    display.drawFastVLine(i, 60 - soundHistory[i], soundHistory[i], SH110X_WHITE);
+  }
+
+  // DRAW TEMP LINE (Top Right)
+  for (int i = 0; i < 59; i++) {
+    // drawLine(x1, y1, x2, y2, color)
+    display.drawLine(i + 68, tempHistory[i], i + 69, tempHistory[i+1], SH110X_WHITE);
+  }
+
+  display.display();
+  delay(50); // Control the "scroll" speed
 }
-
-
-
-
