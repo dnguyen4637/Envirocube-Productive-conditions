@@ -7,7 +7,24 @@
 #define SCREEN_HEIGHT 128 // OLED display height, in pixels
 #define OLED_RESET -1     // can set an oled reset pin if desired
 
+
+const int MOSI_PIN = 35; 
+const int MISO_PIN = 37;
+const int SCK_PIN  = 36;
+const int A3_PIN   = 15;  
+const int A4_PIN   = 14;  
+const int A5_PIN   = 8;  
+// cosnt int 3.3V_pin   = 9;
+const int CS_PIN = 14;
+
+const int SCLK_PIN = 36;
+
+const int DC_PIN = 15;
+
+const int RST_PIN = 8;
+
 Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, MOSI_PIN, SCLK_PIN, DC_PIN, RST_PIN, CS_PIN);
+
 
 
 void setup() {
@@ -26,7 +43,7 @@ void setup() {
   display.setTextSize(2);
   display.setTextColor(SH110X_WHITE);
   display.setCursor(10, 10);
-  display.println("Hello, World!");
+  display.println("ALERT: It is Loud ");
   display.display();
 }
 
