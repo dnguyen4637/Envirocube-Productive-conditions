@@ -38,6 +38,9 @@
 #include <Arduino.h>
 #include <SensirionI2cSen66.h>
 #include <Wire.h>
+#include <ESP_I2S.h>
+#include <math.h>
+#include "sos-iir-filter.h"
 #include "config.h"
 #include "AdafruitIO_WiFi.h"
 
@@ -48,13 +51,38 @@
 #endif
 #define NO_ERROR 0
 
-// Publish interval in milliseconds for round-robin
-#define PUBLISH_INTERVAL_MS 2000
+#define READ_INTERVAL_MS 1000
+#define PUBLISH_INTERVAL_MS 3000 // Publish interval in milliseconds for round-robin
+#define SOUND_PUBLISH_INTERVAL_MS 10000
+
+// Audio processing configuration
+#define LEQ_PERIOD        1
+#define MIC_OFFSET_DB     3.0103
+#define MIC_SENSITIVITY   -26
+#define MIC_REF_DB        94.0
+#define MIC_OVERLOAD_DB   116.0
+#define MIC_NOISE_DB      29
+#define MIC_BITS          24
+
+#define SAMPLE_RATE       48000
+#define SAMPLE_BITS       32
+#define SAMPLE_T          int32_t
+#define SAMPLES_SHORT     (SAMPLE_RATE / 8)
+#define SAMPLES_LEQ       (SAMPLE_RATE * LEQ_PERIOD)
+
+#define MIC_CONVERT(s)    ((s) >> (SAMPLE_BITS - MIC_BITS))
+
+#define I2S_TASK_PRI      4
+#define I2S_TASK_STACK    4096
 
 SensirionI2cSen66 sensor;
 
 static char errorMessage[64];
 static int16_t error;
+
+const uint8_t I2S_SCK = 18;
+const uint8_t I2S_WS = 16;
+const uint8_t I2S_DIN = 17;
 
 // Adafruit IO connection
 AdafruitIO_WiFi io(IO_USERNAME, IO_KEY, WIFI_SSID, WIFI_PASS);
@@ -65,8 +93,11 @@ AdafruitIO_Feed *pm25Feed = io.feed("envirocube.pm2-5");
 AdafruitIO_Feed *tempFeed = io.feed("envirocube.temperature");
 AdafruitIO_Feed *humidFeed = io.feed("envirocube.humidity");
 AdafruitIO_Feed *co2Feed = io.feed("envirocube.co2");
+AdafruitIO_Feed *soundDbFeed = io.feed("envirocube.sound-db");
 
-unsigned long lastPublishTime = 0;
+unsigned long nextReadTime = 0;
+unsigned long nextPublishTime = 0;
+unsigned long nextSoundPublishTime = 0;
 
 bool isValidPm(float val) { return val > 0.0f && val < 1000.0f; }
 bool isValidHumidity(float val) { return val > 0.0f && val < 100.0f; }
@@ -77,65 +108,146 @@ bool isValidCo2(uint16_t val) { return val > 0 && val < 40000; }
 
 int currSensor = 0;
 
-void setup() {
+float massConcentrationPm1p0 = 0.0;
+float massConcentrationPm2p5 = 0.0;
+float massConcentrationPm4p0 = 0.0;
+float massConcentrationPm10p0 = 0.0;
+float humidity = 0.0;
+float temperature = 0.0;
+float vocIndex = 0.0;
+float noxIndex = 0.0;
+uint16_t co2 = 0;
 
-    Serial.begin(115200);
-    while (!Serial) {
-        delay(100);
-    }
-    Wire.begin();
-    sensor.begin(Wire, SEN66_I2C_ADDR_6B);
+const double MIC_REF_AMPL =
+    pow(10.0, static_cast<double>(MIC_SENSITIVITY) / 20.0) * ((1 << (MIC_BITS - 1)) - 1);
 
-    error = sensor.deviceReset();
-    if (error != NO_ERROR) {
-        Serial.print("Error trying to execute deviceReset(): ");
-        errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
-        return;
-    }
-    delay(1200);
-    int8_t serialNumber[32] = {0};
-    error = sensor.getSerialNumber(serialNumber, 32);
-    if (error != NO_ERROR) {
-        Serial.print("Error trying to execute getSerialNumber(): ");
-        errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
-        return;
-    }
-    Serial.print("serialNumber: ");
-    Serial.print((const char*)serialNumber);
-    Serial.println();
-    error = sensor.startContinuousMeasurement();
-    if (error != NO_ERROR) {
-        Serial.print("Error trying to execute startContinuousMeasurement(): ");
-        errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
-        return;
-    }
+// TDK/InvenSense ICS-43434 microphone equalizer
+SOS_Coefficients ICS43434_sos[] = {
+    {+0.96986791463971267f, +0.23515976355743193f, -0.06681948004769928f, -0.00111521990688128f},
+    {-1.98905931743624453f, +0.98908924206960169f, +1.99755331853906037f, -0.99755481510122113f}};
 
-    Serial.print("Connecting to Adafruit IO");
-    io.connect();
-    while (io.status() < AIO_CONNECTED) {
-        Serial.print(".");
-        delay(500);
+// A-weighting filter
+SOS_Coefficients A_weighting_sos[] = {
+    {-2.00026996133106f, +1.00027056142719f, -1.060868438509278f, -0.163987445885926f},
+    {+4.35912384203144f, +3.09120265783884f, +1.208419926363593f, -0.273166998428332f},
+    {-0.70930303489759f, -0.29071868393580f, +1.982242159753048f, -0.982298594928989f}};
+
+SOS_IIR_Filter ICS43434(
+    sizeof(ICS43434_sos) / sizeof(ICS43434_sos[0]),
+    0.477326418836803f,
+    ICS43434_sos);
+
+SOS_IIR_Filter A_weighting(
+    sizeof(A_weighting_sos) / sizeof(A_weighting_sos[0]),
+    0.169994948147430f,
+    A_weighting_sos);
+
+#define MIC_EQUALIZER ICS43434
+#define WEIGHTING A_weighting
+
+struct sum_queue_t {
+    float sum_sqr_SPL;
+    float sum_sqr_weighted;
+    uint32_t proc_ticks;
+};
+
+QueueHandle_t samples_queue = nullptr;
+float samples[SAMPLES_SHORT] __attribute__((aligned(4)));
+I2SClass i2s;
+
+double leqSumSqr = 0;
+uint32_t leqSamples = 0;
+double latestLeqDb = NAN;
+bool hasLatestLeqDb = false;
+
+void mic_i2s_init() {
+    i2s.setPins(I2S_SCK, I2S_WS, -1, I2S_DIN);
+    if (!i2s.begin(I2S_MODE_STD,
+                   SAMPLE_RATE,
+                   I2S_DATA_BIT_WIDTH_32BIT,
+                   I2S_SLOT_MODE_MONO,
+                   I2S_STD_SLOT_LEFT)) {
+        Serial.println("Failed to initialize I2S bus!");
+        vTaskDelete(nullptr);
     }
-    Serial.println();
-    Serial.println(io.statusText());
 }
 
-void loop() {
-    io.run();
+void mic_i2s_reader_task(void* parameter) {
+    (void)parameter;
+    mic_i2s_init();
 
-    float massConcentrationPm1p0 = 0.0;
-    float massConcentrationPm2p5 = 0.0;
-    float massConcentrationPm4p0 = 0.0;
-    float massConcentrationPm10p0 = 0.0;
-    float humidity = 0.0;
-    float temperature = 0.0;
-    float vocIndex = 0.0;
-    float noxIndex = 0.0;
-    uint16_t co2 = 0;
-    delay(1000);
+    // Discard one startup block to let microphone stream stabilize.
+    i2s.readBytes(reinterpret_cast<char*>(samples), SAMPLES_SHORT * sizeof(SAMPLE_T));
+
+    while (true) {
+        const size_t bytesRead =
+            i2s.readBytes(reinterpret_cast<char*>(samples), SAMPLES_SHORT * sizeof(SAMPLE_T));
+        if (bytesRead != (SAMPLES_SHORT * sizeof(SAMPLE_T))) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        TickType_t start_tick = xTaskGetTickCount();
+        SAMPLE_T* int_samples = (SAMPLE_T*)&samples;
+        for (int i = 0; i < SAMPLES_SHORT; i++) {
+            samples[i] = static_cast<float>(MIC_CONVERT(int_samples[i]));
+        }
+
+        sum_queue_t q;
+        q.sum_sqr_SPL = MIC_EQUALIZER.filter(samples, samples, SAMPLES_SHORT);
+        q.sum_sqr_weighted = WEIGHTING.filter(samples, samples, SAMPLES_SHORT);
+        q.proc_ticks = xTaskGetTickCount() - start_tick;
+
+        xQueueSend(samples_queue, &q, 0);
+    }
+}
+
+void processAudioQueue() {
+    if (samples_queue == nullptr) {
+        return;
+    }
+
+    sum_queue_t q;
+    while (xQueueReceive(samples_queue, &q, 0) == pdTRUE) {
+        double short_mean_sqr = static_cast<double>(q.sum_sqr_SPL) / SAMPLES_SHORT;
+        double short_rms = sqrt(short_mean_sqr);
+        double short_spl_db = MIC_OFFSET_DB + MIC_REF_DB + 20 * log10(short_rms / MIC_REF_AMPL);
+
+        if (short_spl_db > MIC_OVERLOAD_DB) {
+            leqSumSqr = INFINITY;
+        } else if (isnan(short_spl_db) || (short_spl_db < MIC_NOISE_DB)) {
+            leqSumSqr = -INFINITY;
+        }
+
+        leqSumSqr += q.sum_sqr_weighted;
+        leqSamples += SAMPLES_SHORT;
+
+        if (leqSamples >= SAMPLES_LEQ) {
+            double leq_mean_sqr = leqSumSqr / leqSamples;
+            double leq_rms = sqrt(leq_mean_sqr);
+            latestLeqDb = MIC_OFFSET_DB + MIC_REF_DB + 20 * log10(leq_rms / MIC_REF_AMPL);
+            hasLatestLeqDb = isfinite(latestLeqDb);
+
+            leqSumSqr = 0;
+            leqSamples = 0;
+
+            if (hasLatestLeqDb) {
+                Serial.printf(">dB: %.1f\n", latestLeqDb);
+            }
+        }
+    }
+}
+
+void readSEN66() {
+    massConcentrationPm1p0 = 0.0;
+    massConcentrationPm2p5 = 0.0;
+    massConcentrationPm4p0 = 0.0;
+    massConcentrationPm10p0 = 0.0;
+    humidity = 0.0;
+    temperature = 0.0;
+    vocIndex = 0.0;
+    noxIndex = 0.0;
+
     error = sensor.readMeasuredValues(
         massConcentrationPm1p0, massConcentrationPm2p5, massConcentrationPm4p0,
         massConcentrationPm10p0, humidity, temperature, vocIndex, noxIndex,
@@ -175,16 +287,92 @@ void loop() {
     Serial.println(noxValid ? String(noxIndex) : "INVALID");
     Serial.print(">co2: ");
     Serial.println(co2Valid ? String(co2) : "INVALID");
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(2000);
+    Wire.begin();
+    sensor.begin(Wire, SEN66_I2C_ADDR_6B);
+
+    error = sensor.deviceReset();
+    if (error != NO_ERROR) {
+        Serial.print("Error trying to execute deviceReset(): ");
+        errorToString(error, errorMessage, sizeof errorMessage);
+        Serial.println(errorMessage);
+        return;
+    }
+    delay(1200);
+    int8_t serialNumber[32] = {0};
+    error = sensor.getSerialNumber(serialNumber, 32);
+    if (error != NO_ERROR) {
+        Serial.print("Error trying to execute getSerialNumber(): ");
+        errorToString(error, errorMessage, sizeof errorMessage);
+        Serial.println(errorMessage);
+        return;
+    }
+    Serial.print("serialNumber: ");
+    Serial.print((const char*)serialNumber);
+    Serial.println();
+    error = sensor.startContinuousMeasurement();
+    if (error != NO_ERROR) {
+        Serial.print("Error trying to execute startContinuousMeasurement(): ");
+        errorToString(error, errorMessage, sizeof errorMessage);
+        Serial.println(errorMessage);
+        return;
+    }
+
+    Serial.print("Connecting to Adafruit IO");
+    io.connect();
+    while (io.status() < AIO_CONNECTED) {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.println();
+    Serial.println(io.statusText());
+
+    samples_queue = xQueueCreate(8, sizeof(sum_queue_t));
+    if (samples_queue == nullptr) {
+        Serial.println("Failed to create audio queue!");
+        return;
+    }
+
+    xTaskCreatePinnedToCore(mic_i2s_reader_task, "Mic I2S Reader", I2S_TASK_STACK, nullptr, I2S_TASK_PRI, nullptr, 1);
+
+    unsigned long currentMillis = millis();
+    nextReadTime = currentMillis + READ_INTERVAL_MS; // Initial read after 1 second
+    nextPublishTime = currentMillis + PUBLISH_INTERVAL_MS; // Initial publish after 2 seconds
+    nextSoundPublishTime = currentMillis + SOUND_PUBLISH_INTERVAL_MS;
+}
+
+void loop() {
+    io.run();
+
+    processAudioQueue();
+
+    unsigned long currentMillis = millis();
+    if (currentMillis >= nextReadTime) {
+        nextReadTime = currentMillis + READ_INTERVAL_MS;
+        readSEN66();
+    }
 
     // Publish in round-robin fashion to avoid free plan data limits
-    if (millis() - lastPublishTime >= PUBLISH_INTERVAL_MS) {
-        lastPublishTime = millis();
+    if (currentMillis >= nextPublishTime) {
+        nextPublishTime = currentMillis + PUBLISH_INTERVAL_MS;
         Serial.println("Publishing to Adafruit IO...");
-        if (pm1Valid && currSensor == 0) pm1Feed->save(massConcentrationPm1p0);
-        if (pm25Valid && currSensor == 1) pm25Feed->save(massConcentrationPm2p5);
-        if (tempValid && currSensor == 2) tempFeed->save(temperature);
-        if (humidValid && currSensor == 3) humidFeed->save(humidity);
-        if (co2Valid && currSensor == 4) co2Feed->save(co2);
+        if (isValidPm(massConcentrationPm1p0) && currSensor == 0) pm1Feed->save(massConcentrationPm1p0);
+        if (isValidPm(massConcentrationPm2p5) && currSensor == 1) pm25Feed->save(massConcentrationPm2p5);
+        if (isValidTemperature(temperature) && currSensor == 2) tempFeed->save(temperature);
+        if (isValidHumidity(humidity) && currSensor == 3) humidFeed->save(humidity);
+        if (isValidCo2(co2) && currSensor == 4) co2Feed->save(co2);
         currSensor = (currSensor + 1) % 5;
+    }
+
+    if (currentMillis >= nextSoundPublishTime) {
+        nextSoundPublishTime = currentMillis + SOUND_PUBLISH_INTERVAL_MS;
+        if (hasLatestLeqDb) {
+            Serial.println("Publishing sound level to Adafruit IO...");
+            soundDbFeed->save(static_cast<float>(latestLeqDb));
+        }
     }
 }
