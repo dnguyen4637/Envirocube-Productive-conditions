@@ -40,6 +40,10 @@
 #include <Wire.h>
 #include <ESP_I2S.h>
 #include <math.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
 #include "sos-iir-filter.h"
 #include "config.h"
 #include "AdafruitIO_WiFi.h"
@@ -54,6 +58,7 @@
 #define READ_INTERVAL_MS 1000
 #define PUBLISH_INTERVAL_MS 3000 // Publish interval in milliseconds for round-robin
 #define SOUND_PUBLISH_INTERVAL_MS 10000
+#define BLE_SCAN_TIME_S 30
 
 // Audio processing configuration
 #define LEQ_PERIOD        1
@@ -80,6 +85,8 @@ SensirionI2cSen66 sensor;
 static char errorMessage[64];
 static int16_t error;
 
+BLEScan* pBLEScan;
+
 const uint8_t I2S_SCK = 18;
 const uint8_t I2S_WS = 16;
 const uint8_t I2S_DIN = 17;
@@ -94,6 +101,7 @@ AdafruitIO_Feed *tempFeed = io.feed("envirocube.temperature");
 AdafruitIO_Feed *humidFeed = io.feed("envirocube.humidity");
 AdafruitIO_Feed *co2Feed = io.feed("envirocube.co2");
 AdafruitIO_Feed *soundDbFeed = io.feed("envirocube.sound-db");
+AdafruitIO_Feed *bleFeed = io.feed("envirocube.ble-count");
 
 unsigned long nextReadTime = 0;
 unsigned long nextPublishTime = 0;
@@ -117,6 +125,8 @@ float temperature = 0.0;
 float vocIndex = 0.0;
 float noxIndex = 0.0;
 uint16_t co2 = 0;
+int bleScanResults = 0;
+bool hasNewBleScanResults = false;
 
 const double MIC_REF_AMPL =
     pow(10.0, static_cast<double>(MIC_SENSITIVITY) / 20.0) * ((1 << (MIC_BITS - 1)) - 1);
@@ -159,6 +169,14 @@ double leqSumSqr = 0;
 uint32_t leqSamples = 0;
 double latestLeqDb = NAN;
 bool hasLatestLeqDb = false;
+
+void setup_ble() {
+    BLEDevice::init("EnviroStudy-" DEVICE_ID);
+    pBLEScan = BLEDevice::getScan();
+    pBLEScan->setActiveScan(true);
+    pBLEScan->setInterval(100);
+    pBLEScan->setWindow(99);
+}
 
 void mic_i2s_init() {
     i2s.setPins(I2S_SCK, I2S_WS, -1, I2S_DIN);
@@ -289,6 +307,22 @@ void readSEN66() {
     Serial.println(co2Valid ? String(co2) : "INVALID");
 }
 
+void getBleScanResults(BLEScanResults scanResults) {
+    BLEScanResults* foundDevices = &scanResults;
+    bleScanResults = foundDevices->getCount();
+    hasNewBleScanResults = foundDevices->getCount() > 0;
+    Serial.print(">bleCount: ");
+    Serial.println(bleScanResults);
+    pBLEScan->clearResults();
+}
+
+void startBleScan() {
+    if (pBLEScan == nullptr) {
+        return;
+    }
+    pBLEScan->start(BLE_SCAN_TIME_S, getBleScanResults, false);
+}
+
 void setup() {
     Serial.begin(115200);
     delay(2000);
@@ -331,11 +365,15 @@ void setup() {
     Serial.println();
     Serial.println(io.statusText());
 
+    setup_ble();
+
     samples_queue = xQueueCreate(8, sizeof(sum_queue_t));
     if (samples_queue == nullptr) {
         Serial.println("Failed to create audio queue!");
         return;
     }
+
+    startBleScan();
 
     xTaskCreatePinnedToCore(mic_i2s_reader_task, "Mic I2S Reader", I2S_TASK_STACK, nullptr, I2S_TASK_PRI, nullptr, 1);
 
@@ -365,7 +403,12 @@ void loop() {
         if (isValidTemperature(temperature) && currSensor == 2) tempFeed->save(temperature);
         if (isValidHumidity(humidity) && currSensor == 3) humidFeed->save(humidity);
         if (isValidCo2(co2) && currSensor == 4) co2Feed->save(co2);
-        currSensor = (currSensor + 1) % 5;
+        if (hasNewBleScanResults && currSensor == 5) {
+            bleFeed->save(bleScanResults);
+            hasNewBleScanResults = false;
+            startBleScan();
+        }
+        currSensor = (currSensor + 1) % 6;
     }
 
     if (currentMillis >= nextSoundPublishTime) {
