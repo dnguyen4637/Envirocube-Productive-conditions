@@ -185,7 +185,7 @@ void mic_i2s_init() {
                    I2S_DATA_BIT_WIDTH_32BIT,
                    I2S_SLOT_MODE_MONO,
                    I2S_STD_SLOT_LEFT)) {
-        Serial.println("Failed to initialize I2S bus!");
+        // Serial.println("Failed to initialize I2S bus!");
         vTaskDelete(nullptr);
     }
 }
@@ -250,7 +250,7 @@ void processAudioQueue() {
             leqSamples = 0;
 
             if (hasLatestLeqDb) {
-                Serial.printf(">dB: %.1f\n", latestLeqDb);
+                // Serial.printf(">dB: %.1f\n", latestLeqDb);
             }
         }
     }
@@ -271,9 +271,9 @@ void readSEN66() {
         massConcentrationPm10p0, humidity, temperature, vocIndex, noxIndex,
         co2);
     if (error != NO_ERROR) {
-        Serial.print("Error trying to execute readMeasuredValues(): ");
+        // Serial.print("Error trying to execute readMeasuredValues(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
+        // Serial.println(errorMessage);
         return;
     }
     bool pm1Valid = isValidPm(massConcentrationPm1p0);
@@ -286,33 +286,33 @@ void readSEN66() {
     bool noxValid = isValidNox(noxIndex);
     bool co2Valid = isValidCo2(co2);
 
-    Serial.println("--------------------------------");
-    Serial.print(">massConcentrationPm1p0: ");
-    Serial.println(pm1Valid ? String(massConcentrationPm1p0) : "INVALID");
-    Serial.print(">massConcentrationPm2p5: ");
-    Serial.println(pm25Valid ? String(massConcentrationPm2p5) : "INVALID");
-    Serial.print(">massConcentrationPm4p0: ");
-    Serial.println(pm4Valid ? String(massConcentrationPm4p0) : "INVALID");
-    Serial.print(">massConcentrationPm10p0: ");
-    Serial.println(pm10Valid ? String(massConcentrationPm10p0) : "INVALID");
-    Serial.print(">humidity: ");
-    Serial.println(humidValid ? String(humidity) : "INVALID");
-    Serial.print(">temperature: ");
-    Serial.println(tempValid ? String(temperature) : "INVALID");
-    Serial.print(">vocIndex: ");
-    Serial.println(vocValid ? String(vocIndex) : "INVALID");
-    Serial.print(">noxIndex: ");
-    Serial.println(noxValid ? String(noxIndex) : "INVALID");
-    Serial.print(">co2: ");
-    Serial.println(co2Valid ? String(co2) : "INVALID");
+    // Serial.println("--------------------------------");
+    // Serial.print(">massConcentrationPm1p0: ");
+    // Serial.println(pm1Valid ? String(massConcentrationPm1p0) : "INVALID");
+    // Serial.print(">massConcentrationPm2p5: ");
+    // Serial.println(pm25Valid ? String(massConcentrationPm2p5) : "INVALID");
+    // Serial.print(">massConcentrationPm4p0: ");
+    // Serial.println(pm4Valid ? String(massConcentrationPm4p0) : "INVALID");
+    // Serial.print(">massConcentrationPm10p0: ");
+    // Serial.println(pm10Valid ? String(massConcentrationPm10p0) : "INVALID");
+    // Serial.print(">humidity: ");
+    // Serial.println(humidValid ? String(humidity) : "INVALID");
+    // Serial.print(">temperature: ");
+    // Serial.println(tempValid ? String(temperature) : "INVALID");
+    // Serial.print(">vocIndex: ");
+    // Serial.println(vocValid ? String(vocIndex) : "INVALID");
+    // Serial.print(">noxIndex: ");
+    // Serial.println(noxValid ? String(noxIndex) : "INVALID");
+    // Serial.print(">co2: ");
+    // Serial.println(co2Valid ? String(co2) : "INVALID");
 }
 
 void getBleScanResults(BLEScanResults scanResults) {
     BLEScanResults* foundDevices = &scanResults;
     bleScanResults = foundDevices->getCount();
     hasNewBleScanResults = foundDevices->getCount() > 0;
-    Serial.print(">bleCount: ");
-    Serial.println(bleScanResults);
+    // Serial.print(">bleCount: ");
+    // Serial.println(bleScanResults);
     pBLEScan->clearResults();
 }
 
@@ -331,45 +331,45 @@ void setup() {
 
     error = sensor.deviceReset();
     if (error != NO_ERROR) {
-        Serial.print("Error trying to execute deviceReset(): ");
+        // Serial.print("Error trying to execute deviceReset(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
+        // Serial.println(errorMessage);
         return;
     }
     delay(1200);
     int8_t serialNumber[32] = {0};
     error = sensor.getSerialNumber(serialNumber, 32);
     if (error != NO_ERROR) {
-        Serial.print("Error trying to execute getSerialNumber(): ");
+        // Serial.print("Error trying to execute getSerialNumber(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
+        // Serial.println(errorMessage);
         return;
     }
-    Serial.print("serialNumber: ");
-    Serial.print((const char*)serialNumber);
-    Serial.println();
+    // Serial.print("serialNumber: ");
+    // Serial.print((const char*)serialNumber);
+    // Serial.println();
     error = sensor.startContinuousMeasurement();
     if (error != NO_ERROR) {
-        Serial.print("Error trying to execute startContinuousMeasurement(): ");
+        // Serial.print("Error trying to execute startContinuousMeasurement(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
-        Serial.println(errorMessage);
+        // Serial.println(errorMessage);
         return;
     }
 
-    Serial.print("Connecting to Adafruit IO");
+    // Serial.print("Connecting to Adafruit IO");
     io.connect();
     while (io.status() < AIO_CONNECTED) {
-        Serial.print(".");
+        // Serial.print(".");
         delay(500);
     }
-    Serial.println();
-    Serial.println(io.statusText());
+    // Serial.println();
+    // Serial.println(io.statusText());
 
     setup_ble();
 
     samples_queue = xQueueCreate(8, sizeof(sum_queue_t));
     if (samples_queue == nullptr) {
-        Serial.println("Failed to create audio queue!");
+        // Serial.println("Failed to create audio queue!");
         return;
     }
 
@@ -397,7 +397,7 @@ void loop() {
     // Publish in round-robin fashion to avoid free plan data limits
     if (currentMillis >= nextPublishTime) {
         nextPublishTime = currentMillis + PUBLISH_INTERVAL_MS;
-        Serial.println("Publishing to Adafruit IO...");
+        // Serial.println("Publishing to Adafruit IO...");
         if (isValidPm(massConcentrationPm1p0) && currSensor == 0) pm1Feed->save(massConcentrationPm1p0);
         if (isValidPm(massConcentrationPm2p5) && currSensor == 1) pm25Feed->save(massConcentrationPm2p5);
         if (isValidTemperature(temperature) && currSensor == 2) tempFeed->save(temperature);
@@ -414,7 +414,7 @@ void loop() {
     if (currentMillis >= nextSoundPublishTime) {
         nextSoundPublishTime = currentMillis + SOUND_PUBLISH_INTERVAL_MS;
         if (hasLatestLeqDb) {
-            Serial.println("Publishing sound level to Adafruit IO...");
+            // Serial.println("Publishing sound level to Adafruit IO...");
             soundDbFeed->save(static_cast<float>(latestLeqDb));
         }
     }
