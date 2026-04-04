@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
+#include <Adafruit_NeoPixel.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 128
@@ -13,6 +14,24 @@ const int SCK_PIN  = 36;
 const int CS_PIN   = 14;
 const int DC_PIN   = 15;
 const int RST_PIN  = 8;
+const int D13_PIN  = 13;
+const int D12_PIN  = 12;
+const int D11_PIN  = 11;
+const int D10_PIN  = 10;
+const int D9_PIN   = 9;
+
+// WS2812B configuration
+const uint16_t LED_COUNT = 1; // LEDs per data pin
+const uint8_t MAX_BRIGHTNESS = 64; // 25% brightness cap to reduce power draw
+
+Adafruit_NeoPixel pixelsD13(LED_COUNT, D13_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixelsD12(LED_COUNT, D12_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixelsD11(LED_COUNT, D11_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixelsD10(LED_COUNT, D10_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixelsD9(LED_COUNT, D9_PIN, NEO_GRB + NEO_KHZ800);
+
+Adafruit_NeoPixel* strips[] = {&pixelsD13, &pixelsD12, &pixelsD11, &pixelsD10, &pixelsD9};
+const uint8_t STRIP_COUNT = sizeof(strips) / sizeof(strips[0]);
 
 Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, MOSI_PIN, SCK_PIN, DC_PIN, RST_PIN, CS_PIN);
 
@@ -24,6 +43,15 @@ int aqiHistory[60];
 float frameCounter = 0; // Used to create smooth wave motion
 
 void setup() {
+  for (uint8_t s = 0; s < STRIP_COUNT; s++) {
+    strips[s]->begin();
+    strips[s]->setBrightness(MAX_BRIGHTNESS);
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+      strips[s]->setPixelColor(i, strips[s]->Color(0, 255, 0));
+    }
+    strips[s]->show();
+  }
+
   display.begin(0x3D, true);
   display.clearDisplay();
   display.setTextSize(1);
