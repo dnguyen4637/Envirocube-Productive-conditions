@@ -57,11 +57,62 @@ void setup() {
   }
 }
 
-// Function to set LED color based on 0-100 value
-void updateStripColor(int stripIndex, int value) {
-  // If value is high (e.g. > 80), turn Red. Otherwise, stay Green.
-  CRGB statusColor = (value > 80) ? CRGB::Red : CRGB::Green;
-  fill_solid(leds[stripIndex], NUM_LEDS, statusColor);
+// Specific color functions for each metric
+CRGB getSoundColor(int db) {
+  if (db > 60) return CRGB::Red;
+  if (db > 50) return CRGB::Yellow;
+  return CRGB::Green;
+}
+
+CRGB getTempColor(int f) {
+  if (f > 79) return CRGB::Red;
+  if (f > 75) return CRGB::Yellow;
+  return CRGB::Green;
+}
+
+CRGB getCO2Color(int ppm) {
+  if (ppm > 1500) return CRGB::Red;
+  if (ppm > 800) return CRGB::Yellow;
+  return CRGB::Green;
+}
+
+CRGB getPM25Color(int val) {
+  if (val > 20) return CRGB::Red;
+  if (val > 5) return CRGB::Yellow;
+  return CRGB::Green;
+}
+
+// Individual update functions for each sensor/metric
+void updateSoundLED(int db) {
+  fill_solid(leds[0], NUM_LEDS, getSoundColor(db));
+}
+
+void updateTempLED(int f) {
+  fill_solid(leds[1], NUM_LEDS, getTempColor(f));
+}
+
+void updateCO2LED(int ppm) {
+  fill_solid(leds[2], NUM_LEDS, getCO2Color(ppm));
+}
+
+void updatePM25LED(int val) {
+  fill_solid(leds[3], NUM_LEDS, getPM25Color(val));
+}
+
+void updateGeneralHealthLED(int sound, int temp, int co2, int pm25) {
+  CRGB sC = getSoundColor(sound);
+  CRGB tC = getTempColor(temp);
+  CRGB cC = getCO2Color(co2);
+  CRGB pC = getPM25Color(pm25);
+
+  // If any is Red, General is Red. Else if any is Yellow, General is Yellow.
+  CRGB healthColor = CRGB::Green;
+  if (sC == CRGB::Red || tC == CRGB::Red || cC == CRGB::Red || pC == CRGB::Red) {
+    healthColor = CRGB::Red;
+  } else if (sC == CRGB::Yellow || tC == CRGB::Yellow || cC == CRGB::Yellow || pC == CRGB::Yellow) {
+    healthColor = CRGB::Yellow;
+  }
+  fill_solid(leds[4], NUM_LEDS, healthColor);
 }
 
 void drawBox(int x, int y, const char* label, int value, int history[]) {
@@ -82,11 +133,11 @@ void loop() {
     lastUpdate = millis();
     frameCounter += 0.1; // Reduced from 0.2 to slow down the wave motion
 
-    // Generate Dummy Data
-    int dummySound = 40 + (sin(frameCounter) * 45) + random(-5, 6); // Wider swing to hit "Red"
-    int dummyTemp = 72 + (cos(frameCounter * 0.5) * 5);
-    int dummyCO2 = 400 + (sin(frameCounter * 0.8) * 80);
-    int dummyAQI = 15 + random(0, 4);
+    // Generate Dummy Data (Raw values)
+    int rawSound = 45 + (sin(frameCounter) * 25) + random(-2, 3);   // 20-70 dB range
+    int rawTemp = 72 + (cos(frameCounter * 0.5) * 10);             // 62-82 °F range
+    int rawCO2 = 1000 + (sin(frameCounter * 0.8) * 800);           // 200-1800 ppm range
+    int rawPM25 = 15 + (sin(frameCounter * 1.2) * 15) + random(0, 5); // 0-35 µg/m³ range
 
     // Shift Data
     for (int i = 0; i < 59; i++) {
@@ -96,29 +147,27 @@ void loop() {
       aqiHistory[i] = aqiHistory[i+1];
     }
     
-    // Scale and update history
-    soundHistory[59] = constrain(dummySound, 0, 100);
-    tempHistory[59] = map(dummyTemp, 60, 85, 0, 100); 
-    co2History[59] = map(dummyCO2, 300, 550, 0, 100);
-    aqiHistory[59] = map(dummyAQI, 0, 50, 0, 100);
+    // Scale raw values to 0-100 for the history graphs
+    soundHistory[59] = map(rawSound, 30, 80, 0, 100);
+    tempHistory[59] = map(rawTemp, 60, 90, 0, 100);
+    co2History[59] = map(rawCO2, 400, 2000, 0, 100);
+    aqiHistory[59] = map(rawPM25, 0, 50, 0, 100);
 
-    // --- LED COLOR LOGIC ---
-    updateStripColor(0, soundHistory[59]); // Strip 0 reacts to Sound
-    updateStripColor(1, tempHistory[59]);  // Strip 1 reacts to Temp
-    updateStripColor(2, co2History[59]);   // Strip 2 reacts to CO2
-    updateStripColor(3, aqiHistory[59]);   // Strip 3 reacts to AQI
-    // Strip 4 can be a "General Health" indicator (Average of all)
-    int avg = (soundHistory[59] + tempHistory[59] + co2History[59] + aqiHistory[59]) / 4;
-    updateStripColor(4, avg);
+    // --- LED COLOR LOGIC (Using Raw Values) ---
+    updateSoundLED(rawSound);
+    updateTempLED(rawTemp);
+    updateCO2LED(rawCO2);
+    updatePM25LED(rawPM25);
+    updateGeneralHealthLED(rawSound, rawTemp, rawCO2, rawPM25);
 
     FastLED.show();
   }
 
   // Render Display (independent of data speed for smoothness)
   display.clearDisplay();
-  drawBox(0, 0, "SND", map(soundHistory[59], 0, 100, 40, 100), soundHistory);
-  drawBox(68, 0, "TMP", map(tempHistory[59], 0, 100, 60, 85), tempHistory);
-  drawBox(0, 65, "CO2", map(co2History[59], 0, 100, 300, 550), co2History);
-  drawBox(68, 65, "AQI", map(aqiHistory[59], 0, 100, 0, 50), aqiHistory);
+  drawBox(0, 0, "SND", map(soundHistory[59], 0, 100, 30, 80), soundHistory);
+  drawBox(68, 0, "TMP", map(tempHistory[59], 0, 100, 60, 90), tempHistory);
+  drawBox(0, 65, "CO2", map(co2History[59], 0, 100, 400, 2000), co2History);
+  drawBox(68, 65, "PM2.5", map(aqiHistory[59], 0, 100, 0, 50), aqiHistory);
   display.display();
 }
