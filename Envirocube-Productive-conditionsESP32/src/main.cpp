@@ -57,62 +57,15 @@ void setup() {
   }
 }
 
-// Specific color functions for each metric
-CRGB getSoundColor(int db) {
-  if (db > 60) return CRGB::Red;
-  if (db > 50) return CRGB::Yellow;
-  return CRGB::Green;
-}
-
-CRGB getTempColor(int f) {
-  if (f > 79) return CRGB::Red;
-  if (f > 75) return CRGB::Yellow;
-  return CRGB::Green;
-}
-
-CRGB getCO2Color(int ppm) {
-  if (ppm > 1500) return CRGB::Red;
-  if (ppm > 800) return CRGB::Yellow;
-  return CRGB::Green;
-}
-
-CRGB getPM25Color(int val) {
-  if (val > 20) return CRGB::Red;
-  if (val > 5) return CRGB::Yellow;
-  return CRGB::Green;
-}
-
-// Individual update functions for each sensor/metric
-void updateSoundLED(int db) {
-  fill_solid(leds[0], NUM_LEDS, getSoundColor(db));
-}
-
-void updateTempLED(int f) {
-  fill_solid(leds[1], NUM_LEDS, getTempColor(f));
-}
-
-void updateCO2LED(int ppm) {
-  fill_solid(leds[2], NUM_LEDS, getCO2Color(ppm));
-}
-
-void updatePM25LED(int val) {
-  fill_solid(leds[3], NUM_LEDS, getPM25Color(val));
-}
-
-void updateGeneralHealthLED(int sound, int temp, int co2, int pm25) {
-  CRGB sC = getSoundColor(sound);
-  CRGB tC = getTempColor(temp);
-  CRGB cC = getCO2Color(co2);
-  CRGB pC = getPM25Color(pm25);
-
-  // If any is Red, General is Red. Else if any is Yellow, General is Yellow.
-  CRGB healthColor = CRGB::Green;
-  if (sC == CRGB::Red || tC == CRGB::Red || cC == CRGB::Red || pC == CRGB::Red) {
-    healthColor = CRGB::Red;
-  } else if (sC == CRGB::Yellow || tC == CRGB::Yellow || cC == CRGB::Yellow || pC == CRGB::Yellow) {
-    healthColor = CRGB::Yellow;
+// Function to set LED color based on 0-100 value and custom thresholds
+void updateStripColor(int stripIndex, int value, int yellowThreshold, int redThreshold) {
+  CRGB statusColor = CRGB::Green;
+  if (value > redThreshold) {
+    statusColor = CRGB::Red;
+  } else if (value > yellowThreshold) {
+    statusColor = CRGB::Yellow;
   }
-  fill_solid(leds[4], NUM_LEDS, healthColor);
+  fill_solid(leds[stripIndex], NUM_LEDS, statusColor);
 }
 
 void drawBox(int x, int y, const char* label, int value, int history[]) {
@@ -131,7 +84,7 @@ void loop() {
   // Only update data/LEDs every "updateInterval" milliseconds (Slows it down)
   if (millis() - lastUpdate >= updateInterval) {
     lastUpdate = millis();
-    frameCounter += 0.1; // Reduced from 0.2 to slow down the wave motion
+    frameCounter += 0.1;
 
     // Generate Dummy Data (Raw values)
     int rawSound = 45 + (sin(frameCounter) * 25) + random(-2, 3);   // 20-70 dB range
@@ -153,17 +106,26 @@ void loop() {
     co2History[59] = map(rawCO2, 400, 2000, 0, 100);
     aqiHistory[59] = map(rawPM25, 0, 50, 0, 100);
 
-    // --- LED COLOR LOGIC (Using Raw Values) ---
-    updateSoundLED(rawSound);
-    updateTempLED(rawTemp);
-    updateCO2LED(rawCO2);
-    updatePM25LED(rawPM25);
-    updateGeneralHealthLED(rawSound, rawTemp, rawCO2, rawPM25);
+    // --- LED COLOR LOGIC ---
+    updateStripColor(0, soundHistory[59], 40, 60); // Sound: Yellow @ 50dB, Red @ 60dB
+    updateStripColor(1, tempHistory[59],  50, 63); // Temp: Yellow @ 75F, Red @ 79F
+    updateStripColor(2, co2History[59],   25, 68); // CO2: Yellow @ 800ppm, Red @ 1500ppm
+    updateStripColor(3, aqiHistory[59],   10, 40); // PM2.5: Yellow @ 5ug, Red @ 20ug
+
+    // Strip 4: General Health (Average or Worst Case)
+    // For general health, we'll check if any sensor has exceeded its yellow or red threshold
+    int worstValue = 0;
+    if (soundHistory[59] > 60 || tempHistory[59] > 63 || co2History[59] > 68 || aqiHistory[59] > 40) {
+      worstValue = 100; // Red
+    } else if (soundHistory[59] > 40 || tempHistory[59] > 50 || co2History[59] > 25 || aqiHistory[59] > 10) {
+      worstValue = 50;  // Yellow
+    }
+    updateStripColor(4, worstValue, 40, 80);
 
     FastLED.show();
   }
 
-  // Render Display (independent of data speed for smoothness)
+  // Render Display
   display.clearDisplay();
   drawBox(0, 0, "SND", map(soundHistory[59], 0, 100, 30, 80), soundHistory);
   drawBox(68, 0, "TMP", map(tempHistory[59], 0, 100, 60, 90), tempHistory);
