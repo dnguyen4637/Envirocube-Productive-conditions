@@ -3,50 +3,68 @@ import { Chart, registerables } from "chart.js";
 Chart.register(...registerables);
 Chart.defaults.font.family = "'Inter', 'Helvetica Neue', Arial, sans-serif";
 
-// API CONFIG 
-//const ADAFRUIT_BASE = "https://io.adafruit.com/api/v2/not_chai/feeds";
-//const ADAFRUIT_KEY  = ""; 
+const ADAFRUIT_BASE = "https://io.adafruit.com/api/v2/not_chai/feeds";
+const POLL_INTERVAL = 10000;
 
-const POLL_INTERVAL = 10; //change
-
-// FALLBACK DATA
 const FALLBACK = {
-  sound:       0,
   soundSeries: [],
   temp:        [],
   co2:         [],
-  aqi:         [],
-  humidity:    [],
   bleCount:    [],
   pm25:        [],
-  pm1:         [],
 };
 
-// ADAFRUIT DATA
-async function fetchSensorData() {
-  const zero = [{ time: "need to fill in", value: 0 }];
+async function fetchOneFeed(key) {
+  const res = await fetch(`${ADAFRUIT_BASE}/${key}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${key}`);
+  const json = await res.json();
+  return parseFloat(json.last_value);
+}
+
+async function fetchSensorData(prev) {
+  const [temp, co2, sound, bleCount, pm25] = await Promise.all([
+    fetchOneFeed("envirocube.temperature"),
+    fetchOneFeed("envirocube.co2"),
+    fetchOneFeed("envirocube.sound-db"),
+    fetchOneFeed("envirocube.ble-count"),
+    fetchOneFeed("envirocube.pm2-5"),
+  ]);
+
+  const now = new Date().toLocaleTimeString();
+
+  function appendPoint(series, value) {
+    const next = [...(series ?? []), { time: now, value }];
+    return next.length > 60 ? next.slice(-60) : next;
+  }
 
   return {
-    sound: 0,           
-    temp: zero, 
-    co2: zero,
-    aqi: zero,
-    humidity: zero,
-    bleCount: zero,
-    pm25: zero,
-    pm1: zero,
+    sound,
+    soundSeries: appendPoint(prev.soundSeries, sound),
+    temp:        appendPoint(prev.temp,        temp),
+    co2:         appendPoint(prev.co2,         co2),
+    bleCount:    appendPoint(prev.bleCount,    bleCount),
+    pm25:        appendPoint(prev.pm25,        pm25),
   };
 }
 
-// HOOK 
 function useSensorData() {
   const [data, setData]       = useState(FALLBACK);
   const [error, setError]     = useState(null);
   const [loading, setLoading] = useState(true);
+  const dataRef = useRef(FALLBACK);
+
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
+  const reset = useCallback(() => {
+    setData(FALLBACK);
+    dataRef.current = FALLBACK;
+  }, []);
 
   const poll = useCallback(async () => {
     try {
-      const fresh = await fetchSensorData();
+      const fresh = await fetchSensorData(dataRef.current);
       setData(fresh);
       setError(null);
     } catch (err) {
@@ -63,40 +81,34 @@ function useSensorData() {
     return () => clearInterval(id);
   }, [poll]);
 
-  return { data, error, loading };
+  return { data, error, loading, reset };
 }
 
-// THRESHOLDS 
+function getBleCount(series) {
+  if (!series?.length) return 0;
+  return series[series.length - 1].value;
+}
+
 const THRESHOLDS = {
-  temp:     { low: 68,  high: 76  },
-  co2:      { low: 440, high: 470 },
-  aqi:      { low: 75,  high: 85  },
-  humidity: { low: 40,  high: 60  },
-  bleCount: { low: 5,   high: 15  },
-  pm25:     { low: 12,  high: 35  }, 
-  pm1:      { low: 10,  high: 25  },
+  temp:     { low: 75,   high: 79   },
+  co2:      { low: 800,  high: 1500 },
+  aqi:      { low: 75,   high: 85   },
+  bleCount: { low: 5,    high: 15   },
+  pm25:     { low: 5,    high: 20   },
 };
 
-const SEG_COUNT = 30;
-const MAX_DB    = 100;
+const MAX_DB = 100;
 
-// COLOR HELPERS 
-function segColor(segPct) {
-  if (segPct > 0.75) return "#ff5c5c";
-  if (segPct > 0.5)  return "#f0c040";
-  return "#90e8c3";
+function statusColor(value, low, high) {
+  if (value < low)  return "#90e8c3";
+  if (value < high) return "#f0c040";
+  return "#ff5c5c";
 }
 
-function statusColor(value, low, high, invert = false) {
-  if (!invert) {
-    if (value <= low)  return "#90e8c3";
-    if (value <= high) return "#f0c040";
-    return "#ff5c5c";
-  } else {
-    if (value >= high) return "#90e8c3";
-    if (value >= low)  return "#f0c040";
-    return "#ff5c5c";
-  }
+function statusWord(value, low, high) {
+  if (value < low)  return "Optimal";
+  if (value < high) return "Moderate";
+  return "Poor";
 }
 
 function getLatest(series) {
@@ -104,35 +116,6 @@ function getLatest(series) {
   return series[series.length - 1].value;
 }
 
-// SOUND
-function SoundMeter({ value }) {
-  const filled = Math.round((value / MAX_DB) * SEG_COUNT);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", height: 200, gap: 8 }}>
-      <div style={{ fontSize: 13, color: "#90e8c3", fontWeight: 500 }}>{value} dB</div>
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", width: 28, gap: 2 }}>
-        {Array.from({ length: SEG_COUNT }, (_, i) => {
-          const segIdx = SEG_COUNT - i;
-          const lit = segIdx <= filled;
-          return (
-            <div
-              key={i}
-              style={{
-                width: "100%",
-                height: `calc((100% - ${(SEG_COUNT - 1) * 2}px) / ${SEG_COUNT})`,
-                background: lit ? segColor(segIdx / SEG_COUNT) : "#2a2a2a",
-                borderRadius: 2,
-              }}
-            />
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 11, color: "#ffffff" }}>0–100 dB</div>
-    </div>
-  );
-}
-
-// LIVE BAR
 function LiveBar({ value, min, max, color, unit, label }) {
   const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const display = Number.isInteger(value) ? value : value.toFixed(1);
@@ -184,7 +167,6 @@ function LiveBar({ value, min, max, color, unit, label }) {
   );
 }
 
-// LINE GRAPH
 function LineGraph({ id, data, yMin, yMax, color }) {
   const ref      = useRef(null);
   const chartRef = useRef(null);
@@ -199,17 +181,16 @@ function LineGraph({ id, data, yMin, yMax, color }) {
     chartRef.current = new Chart(ref.current, {
       type: "line",
       data: {
-        labels: labels,
+        labels,
         datasets: [{
           data: values,
           borderColor: color,
-          borderWidth: 0,
+          borderWidth: 1.5,
           backgroundColor: color + "22",
-          fill: false,
+          fill: true,
           tension: 0.4,
           pointRadius: 0,
           pointHoverRadius: 0,
-          showLine: false,
         }],
       },
       options: {
@@ -218,7 +199,7 @@ function LineGraph({ id, data, yMin, yMax, color }) {
         plugins: { legend: { display: false } },
         scales: {
           x: {
-            ticks: { color: "#ffffff", font: { size: 11 } },
+            ticks: { color: "#ffffff", font: { size: 11 }, maxTicksLimit: 6 },
             grid:  { color: "rgba(255,255,255,0.06)" },
             border:{ color: "rgba(255,255,255,0.1)" },
           },
@@ -233,7 +214,7 @@ function LineGraph({ id, data, yMin, yMax, color }) {
       },
     });
     return () => chartRef.current?.destroy();
-  }, [color, yMin, yMax, data]); 
+  }, [color, yMin, yMax, data]);
 
   return (
     <div style={{ position: "relative", height: 200, flex: 1 }}>
@@ -242,8 +223,7 @@ function LineGraph({ id, data, yMin, yMax, color }) {
   );
 }
 
-// CARD
-function Card({ title, children, style, accentColor }) {
+function Card({ title, children, style, accentColor, statusLabel }) {
   return (
     <div style={{
       background: "#1e1e1e",
@@ -253,27 +233,42 @@ function Card({ title, children, style, accentColor }) {
       ...style,
     }}>
       <div style={{
-        fontSize: 12,
-        fontWeight: 500,
-        color: accentColor || "#90e8c3",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
         marginBottom: "0.75rem",
-        letterSpacing: "0.06em",
-        textTransform: "uppercase",
       }}>
-        {title}
+        <div style={{
+          fontSize: 12,
+          fontWeight: 500,
+          color: accentColor || "#90e8c3",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}>
+          {title}
+        </div>
+        {statusLabel && (
+          <div style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: accentColor || "#90e8c3",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}>
+            {statusLabel}
+          </div>
+        )}
       </div>
       {children}
     </div>
   );
 }
 
-// CHART AND BARS
 function ChartWithBar({ id, series, yMin, yMax, color, liveMin, liveMax, unit, label, extraBars = [], loading }) {
   const liveValue = loading ? 0 : getLatest(series);
   return (
     <div style={{ display: "flex", gap: 10, alignItems: "stretch", flex: 1 }}>
       <LineGraph id={id} data={loading ? [] : series} yMin={yMin} yMax={yMax} color={color} />
-      {/* Primary bar */}
       <LiveBar
         value={liveValue}
         min={liveMin ?? yMin}
@@ -282,7 +277,6 @@ function ChartWithBar({ id, series, yMin, yMax, color, liveMin, liveMax, unit, l
         unit={unit}
         label={label}
       />
-      {/* Additional bars */}
       {extraBars.map((bar, i) => (
         <LiveBar key={i} {...bar} value={loading ? 0 : bar.value} />
       ))}
@@ -290,29 +284,22 @@ function ChartWithBar({ id, series, yMin, yMax, color, liveMin, liveMax, unit, l
   );
 }
 
-// APP 
 export default function App() {
-  const { data, error, loading } = useSensorData();
+  const { data, error, loading, reset } = useSensorData();
 
-  const tempColor     = statusColor(getLatest(data.temp),     THRESHOLDS.temp.low,     THRESHOLDS.temp.high);
-  const co2Color      = statusColor(getLatest(data.co2),      THRESHOLDS.co2.low,      THRESHOLDS.co2.high);
-  const humidityColor = statusColor(getLatest(data.humidity), THRESHOLDS.humidity.low, THRESHOLDS.humidity.high);
-  const bleColor      = statusColor(getLatest(data.bleCount), THRESHOLDS.bleCount.low, THRESHOLDS.bleCount.high);
-  const pm25Color     = statusColor(getLatest(data.pm25),     THRESHOLDS.pm25.low,     THRESHOLDS.pm25.high);
-  const pm1Color      = statusColor(getLatest(data.pm1),      THRESHOLDS.pm1.low,      THRESHOLDS.pm1.high);
+  const tempColor  = statusColor(getLatest(data.temp),     THRESHOLDS.temp.low,     THRESHOLDS.temp.high);
+  const co2Color   = statusColor(getLatest(data.co2),      THRESHOLDS.co2.low,      THRESHOLDS.co2.high);
+  const bleColor = "#ffffff";  
+  const pm25Color  = statusColor(getLatest(data.pm25),     THRESHOLDS.pm25.low,     THRESHOLDS.pm25.high);
+  const soundColor = statusColor(data.sound, 50, 60);
 
-  const airQualitySeries = data.pm25?.length ? data.pm25 : [];
+  const tempWord  = statusWord(getLatest(data.temp),     THRESHOLDS.temp.low,     THRESHOLDS.temp.high);
+  const co2Word   = statusWord(getLatest(data.co2),      THRESHOLDS.co2.low,      THRESHOLDS.co2.high);
+  const bleWord   = statusWord(getLatest(data.bleCount), THRESHOLDS.bleCount.low, THRESHOLDS.bleCount.high);
+  const pm25Word  = statusWord(getLatest(data.pm25),     THRESHOLDS.pm25.low,     THRESHOLDS.pm25.high);
+  const soundWord = statusWord(data.sound, 50, 60);
 
-  const row1Style = {
-    display: "grid",
-    gridTemplateColumns: "0.5fr 1fr 1fr",
-    gap: "1.25rem",
-    width: "100%",
-    maxWidth: 1400,
-    marginBottom: "1.25rem",
-  };
-
-  const row2Style = {
+  const gridStyle = {
     display: "grid",
     gridTemplateColumns: "repeat(3, 1fr)",
     gap: "1.25rem",
@@ -331,7 +318,6 @@ export default function App() {
       fontFamily: "'Inter', sans-serif",
       boxSizing: "border-box",
     }}>
-      {/* Header */}
       <div style={{ textAlign: "center", marginBottom: "1.75rem" }}>
         <h1 style={{
           fontFamily: "'Orbitron', sans-serif",
@@ -345,58 +331,98 @@ export default function App() {
         <p style={{ color: "#ffffff", fontSize: 12, margin: 0 }}>
           {loading && "loading…"}
           {error   && `⚠ ${error} — showing last known values`}
-          {!loading && !error && `status: not connected · refreshes every ${POLL_INTERVAL}s`}
+          {!loading && !error && `status: live`}
         </p>
       </div>
 
-      {/* Row 1: Sound, Air Quality, BLE */}
-      <div style={row1Style}>
-        {/* Sound */}
-        <Card title="Sound (dB)" accentColor="#90e8c3">
-          <div style={{ display: "flex", justifyContent: "center" }}>
-            <SoundMeter value={loading ? 0 : data.sound} />
-          </div>
-        </Card>
+      {/* Row 1: Control box, Sound, Bluetooth */}
+      <div style={{ ...gridStyle, marginBottom: "1.25rem" }}>
 
-        {/* Air Quality */}
-        <Card title="Air Quality (AQI)" accentColor={pm25Color}>
+        {/* Top-left control box */}
+        <div style={{
+          background: "#1e1e1e",
+          borderRadius: 12,
+          borderTop: "3px solid #2a2a2a",
+          padding: "1rem 1.25rem",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+        }}>
+          <div>
+            <div style={{
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#ffffff",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              marginBottom: "1rem",
+            }}>
+              Status Summary
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {[
+                { label: "Sound",       word: soundWord, color: soundColor },
+                { label: "PM2.5",       word: pm25Word,  color: pm25Color  },
+                { label: "CO₂",         word: co2Word,   color: co2Color   },
+                { label: "Temperature", word: tempWord,  color: tempColor  },
+               
+                { 
+                  label: "Bluetooth", 
+                  word: `${~getBleCount(data.bleCount)} devices`, 
+                  color: bleColor 
+                }
+
+              ].map(({ label, word, color }) => (
+                <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 16, color: "#ffffff" }}>{label}</span>
+                  <span style={{ fontSize: 16, fontWeight: 600, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    {word}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button
+            onClick={reset}
+            style={{
+              marginTop: "1.5rem",
+              background: "transparent",
+              border: "1px solid #444",
+              borderRadius: 8,
+              color: "#aaa",
+              fontSize: 12,
+              fontWeight: 500,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              padding: "0.5rem 1rem",
+              cursor: "pointer",
+              transition: "border-color 0.2s, color 0.2s",
+            }}
+            onMouseEnter={e => { e.target.style.borderColor = "#90e8c3"; e.target.style.color = "#90e8c3"; }}
+            onMouseLeave={e => { e.target.style.borderColor = "#cdcdcd";    e.target.style.color = "#cdcdcd";    }}
+          >
+            Reset Data
+          </button>
+        </div>
+
+        <Card title="Sound (dB)" accentColor={soundColor} statusLabel={soundWord}>
           <ChartWithBar
-            id="airChart"
-            series={airQualitySeries}
+            id="soundChart"
+            series={loading ? [] : (data.soundSeries ?? [])}
             yMin={0}
-            yMax={50}
-            color={pm25Color}
-            unit="AQI"
-            label="AQI"
+            yMax={MAX_DB}
+            color={soundColor}
+            unit="dB"
             loading={loading}
-            extraBars={[
-              {
-                value: getLatest(data.pm25),
-                min:   0,
-                max:   50,
-                color: pm25Color,
-                unit:  "µg/m³",
-                label: "PM2.5",
-              },
-              {
-                value: getLatest(data.pm1),
-                min:   0,
-                max:   50,
-                color: pm1Color,
-                unit:  "µg/m³",
-                label: "PM1",
-              }
-            ]}
           />
         </Card>
 
-        {/* BLE */}
-        <Card title="Bluetooth Devices" accentColor={bleColor}>
+        <Card title="Bluetooth Devices" accentColor={'#ffffff'}>
           <ChartWithBar
             id="bleChart"
             series={data.bleCount}
             yMin={0}
-            yMax={20}
+            yMax={500}
             color={bleColor}
             unit="dev"
             loading={loading}
@@ -404,33 +430,33 @@ export default function App() {
         </Card>
       </div>
 
-      {/* Row 2: Humidity, CO₂, Temperature */}
-      <div style={row2Style}>
-        <Card title="Humidity (%RH)" accentColor={humidityColor}>
+      {/* Row 2: PM2.5, CO₂, Temperature */}
+      <div style={gridStyle}>
+        <Card title="PM2.5 (µg/m³)" accentColor={pm25Color} statusLabel={pm25Word}>
           <ChartWithBar
-            id="humidityChart"
-            series={data.humidity}
-            yMin={20}
-            yMax={80}
-            color={humidityColor}
-            unit="%RH"
+            id="pm25Chart"
+            series={data.pm25}
+            yMin={0}
+            yMax={50}
+            color={pm25Color}
+            unit="µg/m³"
             loading={loading}
           />
         </Card>
 
-        <Card title="CO₂ Levels (ppm)" accentColor={co2Color}>
+        <Card title="CO₂ Levels (ppm)" accentColor={co2Color} statusLabel={co2Word}>
           <ChartWithBar
             id="co2Chart"
             series={data.co2}
-            yMin={400}
-            yMax={520}
+            yMin={0}
+            yMax={5000}
             color={co2Color}
             unit="ppm"
             loading={loading}
           />
         </Card>
 
-        <Card title="Temperature (°F)" accentColor={tempColor}>
+        <Card title="Temperature (°F)" accentColor={tempColor} statusLabel={tempWord}>
           <ChartWithBar
             id="tempChart"
             series={data.temp}
