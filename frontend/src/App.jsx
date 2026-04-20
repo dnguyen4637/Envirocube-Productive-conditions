@@ -4,7 +4,7 @@ Chart.register(...registerables);
 Chart.defaults.font.family = "'Inter', 'Helvetica Neue', Arial, sans-serif";
 
 const ADAFRUIT_BASE = "https://io.adafruit.com/api/v2/not_chai/feeds";
-const POLL_INTERVAL = 10000;
+const POLL_INTERVAL = 300_000;
 
 const FALLBACK = {
   soundSeries: [],
@@ -146,7 +146,7 @@ function LiveBar({ value, min, max, color, unit, label }) {
       <div style={{
         flex: 1,
         width: 12,
-        background: "#2a2a2a",
+        background: "#2e2e2e",
         borderRadius: 6,
         position: "relative",
         overflow: "hidden",
@@ -287,9 +287,17 @@ function ChartWithBar({ id, series, yMin, yMax, color, liveMin, liveMax, unit, l
 export default function App() {
   const { data, error, loading, reset } = useSensorData();
 
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+
   const tempColor  = statusColor(getLatest(data.temp),     THRESHOLDS.temp.low,     THRESHOLDS.temp.high);
   const co2Color   = statusColor(getLatest(data.co2),      THRESHOLDS.co2.low,      THRESHOLDS.co2.high);
-  const bleColor = "#ffffff";  
+  const bleColor   = "#ffffff";
   const pm25Color  = statusColor(getLatest(data.pm25),     THRESHOLDS.pm25.low,     THRESHOLDS.pm25.high);
   const soundColor = statusColor(data.sound, 50, 60);
 
@@ -301,7 +309,7 @@ export default function App() {
 
   const gridStyle = {
     display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
+    gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
     gap: "1.25rem",
     width: "100%",
     maxWidth: 1400,
@@ -311,7 +319,7 @@ export default function App() {
     <div style={{
       minHeight: "100vh",
       background: "#121212",
-      padding: "7rem 2rem 2.5rem",
+      padding: isMobile ? "2rem 1rem 2rem" : "7rem 2rem 2.5rem",
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
@@ -322,7 +330,7 @@ export default function App() {
         <h1 style={{
           fontFamily: "'Orbitron', sans-serif",
           color: "#90e8c3",
-          fontSize: "3.5rem",
+          fontSize: isMobile ? "2.2rem" : "3.5rem",
           margin: "0 0 0.3rem",
           lineHeight: 1,
         }}>
@@ -335,14 +343,14 @@ export default function App() {
         </p>
       </div>
 
-      {/* Row 1: Control box, Sound, Bluetooth */}
+      {/* Row 1: Status Summary, Sound, Temperature */}
       <div style={{ ...gridStyle, marginBottom: "1.25rem" }}>
 
-        {/* Top-left control box */}
+        {/* Status Summary */}
         <div style={{
           background: "#1e1e1e",
           borderRadius: 12,
-          borderTop: "3px solid #2a2a2a",
+          borderTop: "3px solid #ffffff",
           padding: "1rem 1.25rem",
           display: "flex",
           flexDirection: "column",
@@ -365,13 +373,11 @@ export default function App() {
                 { label: "PM2.5",       word: pm25Word,  color: pm25Color  },
                 { label: "CO₂",         word: co2Word,   color: co2Color   },
                 { label: "Temperature", word: tempWord,  color: tempColor  },
-               
-                { 
-                  label: "Bluetooth", 
-                  word: `${~getBleCount(data.bleCount)} devices`, 
-                  color: bleColor 
-                }
-
+                {
+                  label: "Bluetooth",
+                  word: `${getBleCount(data.bleCount)} devices`,
+                  color: bleColor,
+                },
               ].map(({ label, word, color }) => (
                 <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 16, color: "#ffffff" }}>{label}</span>
@@ -399,7 +405,7 @@ export default function App() {
               transition: "border-color 0.2s, color 0.2s",
             }}
             onMouseEnter={e => { e.target.style.borderColor = "#90e8c3"; e.target.style.color = "#90e8c3"; }}
-            onMouseLeave={e => { e.target.style.borderColor = "#cdcdcd";    e.target.style.color = "#cdcdcd";    }}
+            onMouseLeave={e => { e.target.style.borderColor = "#cdcdcd"; e.target.style.color = "#cdcdcd"; }}
           >
             Reset Data
           </button>
@@ -417,7 +423,22 @@ export default function App() {
           />
         </Card>
 
-        <Card title="Bluetooth Devices" accentColor={'#ffffff'}>
+        <Card title="Temperature (°F)" accentColor={tempColor} statusLabel={tempWord}>
+          <ChartWithBar
+            id="tempChart"
+            series={data.temp}
+            yMin={60}
+            yMax={90}
+            color={tempColor}
+            unit="°F"
+            loading={loading}
+          />
+        </Card>
+      </div>
+
+      {/* Row 2: Bluetooth, CO2, PM2.5 */}
+      <div style={gridStyle}>
+        <Card title="Bluetooth Devices" accentColor="#ffffff">
           <ChartWithBar
             id="bleChart"
             series={data.bleCount}
@@ -428,11 +449,20 @@ export default function App() {
             loading={loading}
           />
         </Card>
-      </div>
 
-      {/* Row 2: PM2.5, CO₂, Temperature */}
-      <div style={gridStyle}>
-        <Card title="PM2.5 (µg/m³)" accentColor={pm25Color} statusLabel={pm25Word}>
+        <Card title="CO₂ Levels (ppm)" accentColor={co2Color} statusLabel={co2Word}>
+          <ChartWithBar
+            id="co2Chart"
+            series={data.co2}
+            yMin={0}
+            yMax={3000}
+            color={co2Color}
+            unit="ppm"
+            loading={loading}
+          />
+        </Card>
+
+        <Card title="PM2.5 (ug/m³)" accentColor={pm25Color} statusLabel={pm25Word}>
           <ChartWithBar
             id="pm25Chart"
             series={data.pm25}
@@ -440,30 +470,6 @@ export default function App() {
             yMax={50}
             color={pm25Color}
             unit="µg/m³"
-            loading={loading}
-          />
-        </Card>
-
-        <Card title="CO₂ Levels (ppm)" accentColor={co2Color} statusLabel={co2Word}>
-          <ChartWithBar
-            id="co2Chart"
-            series={data.co2}
-            yMin={0}
-            yMax={5000}
-            color={co2Color}
-            unit="ppm"
-            loading={loading}
-          />
-        </Card>
-
-        <Card title="Temperature (°F)" accentColor={tempColor} statusLabel={tempWord}>
-          <ChartWithBar
-            id="tempChart"
-            series={data.temp}
-            yMin={60}
-            yMax={90}
-            color={tempColor}
-            unit="°F"
             loading={loading}
           />
         </Card>
